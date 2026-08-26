@@ -1,0 +1,23 @@
+# Wazuh secrets - never commit
+client.keys
+ossec.conf
+*.pem
+*.key
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+
+# VMware artifacts
+*.lck/
+*.vmdk
+*.vmem
+*.vmss
+*.nvram
+
+# Raw pulls before sanitization
+*.raw
+
