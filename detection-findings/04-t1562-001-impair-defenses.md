@@ -149,7 +149,7 @@ Level 12 puts it above 60112 at level 8 and well above 92052 at level 4. The des
 ```xml
 <rule id="100102" level="12">
     <if_sid>61603</if_sid>
-    <field name="win.eventdata.commandLine" type="pcre2">(?i)auditpol(\.exe)?"?\s+/(set[^&amp;]*disable|clear|remove|restore)</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)auditpol\S*\s+/(set.*disable|clear|remove|restore)</field>
     <options>no_full_log</options>
     <description>Audit policy impaired via auditpol - User: $(win.eventdata.user)</description>
     <mitre>
@@ -158,25 +158,11 @@ Level 12 puts it above 60112 at level 8 and well above 92052 at level 4. The des
 </rule>
 ```
 
-**Version 2:**
+Version 1 caught both atomic tests, but it only caught the exact way I happened to invoke auditpol. The pattern required a space and then a slash directly after the word, so anything sitting between the two broke it. `auditpol.exe /clear /y` does not match version 1, and neither does `"C:\Windows\System32\auditpol.exe" /clear /y`, which is the shape a script or a scheduled task would normally use. My first attempt at fixing that was to spell out what could sit in between, `(\.exe)?` for the extension and an optional quote for the one closing the path. The extension worked and the quote did not, and rather than keep guessing at every character that might turn up in that position I replaced the lot with `\S*`. That matches any run of non whitespace, so it absorbs the extension, a quote, both, or nothing at all, and the name of the tool still has to be on the line for the rule to fire at all.
 
-```xml
-<rule id="100102" level="12">
-    <if_sid>61603</if_sid>
-    <field name="win.eventdata.commandLine" type="pcre2">(?i)auditpol(\.exe)?"?\s+/(set.*disable|clear|remove|restore)</field>
-    <options>no_full_log</options>
-    <description>Audit policy impaired via auditpol - User: $(win.eventdata.user)</description>
-    <mitre>
-        <id>T1562.001</id>
-    </mitre>
-</rule>
-```
+I also added `restore` to the list of verbs. Version 1 covered disabling, clearing and removing, which are the three obvious ways to reduce auditing, but auditpol can write the policy out to a file with `/backup` and read one back in with `/restore`. An attacker can back the policy up, edit the file so everything is switched off, and restore it, and the command line for that contains none of the words my first version was looking for. It provides the same outcome, which is my rule detecting an attempt at 
 
-Version 1 caught both atomic tests, but it only caught the exact way I happened to invoke auditpol. The pattern required a space and then a slash directly after the word, so anything sitting between the two broke it. `auditpol.exe /clear /y` does not match version 1, and neither does `"C:\Windows\System32\auditpol.exe" /clear /y`, which is the shape a scheduled task or a script would normally use. Adding `(\.exe)?` and an optional quote covers both of those without loosening anything else, since the name of the tool still has to be on the line.
-
-I also added `restore` to the list of verbs. Version 1 covered disabling, clearing and removing, which are the three obvious ways to reduce auditing, but auditpol can write the policy out to a file with `/backup` and read one back in with `/restore`. An attacker can back the policy up, edit the file so everything is switched off, and restore it, and the command line for that contains none of the words my first version was looking for. It provides the same outcome, which is my rule detecting an attempt at impairing audit policy, but through a verb I hadn't thought of before. 
-
-The last change to the pattern was replacing `.*` with `[^&]*` in the set branch. Both atomic tests chain several commands into a single line with `&`, so one command line can hold three separate auditpol invocations. With `.*` the rule could pair a `/set` from one command with the word disable from a different command further along the same line. Restricting it to characters that are not an ampersand keeps each command being judged on its own.
+Everything else in the pattern is unchanged from version 1. The `set.*disable` branch already covered every way of writing a category or subcategory disable, and `clear` and `remove` were doing their job, so there was no reason to touch them.
 
 The description is a quality of life change. Version 1 told me the audit policy was impaired and nothing else, so the first thing anybody would ask is who did it. `$(win.eventdata.user)` fills that in straight from the Sysmon event. Like my brute force rule though, the field doing the convenience work is also the field doing the triage as well. This is beacuse an audit policy change is not automatically an attack, and the thing separating an administrator hardening a machine from an attacker blinding one is usually the account it came from, so having it in the alert list means that judgement can start before the alert is even opened.
 
@@ -310,4 +296,237 @@ Test 5 fired the same rule without me changing anything. The command line here i
 
 This is the part I was aiming at when I wrote the regex against auditpol's own verbs instead of the strings in the test I happened to be running. `clear` and `remove` were branches I had never actually exercised until now, and they held up the first time they saw real input.
 
+
+**Version 2 Test**
+
+These four commands were the benchmark I used for version 2. The first is a control, since version 1 already caught that shape and I wanted to make sure widening the pattern did not break something that was already working. The other three run the same technique in ways version 1 could not match. Rather than guessing at what a stronger rule should look like, I wrote down the variations that got past the first iteration and built version 2 to close their gap, then ran all four against the new rule to confirm.
+
+```commandprompt
+cmd /c auditpol /set /category:"Detailed Tracking" /success:disable
+
+cmd /c auditpol.exe /set /category:"Detailed Tracking" /success:disable
+
+cmd /s /c ""C:\Windows\System32\auditpol.exe" /set /category:"Detailed Tracking" /success:disable"
+
+cmd /c auditpol /restore /file:C:\Users\Public\pol.csv
+```
+
+The first is the plain form and it is the one version 1 already handled. It is in the list as a regression check rather than as a new case.
+
+The second writes out the file extension. Version 1 required whitespace immediately after the word `auditpol` and got a `.` instead, so the match failed before it ever reached the flags. This is the one I have a direct comparison for, because I ran it once before restarting the manager with version 2 and once after. The first run came back as 92004 at level 4 and the second as 100102 at level 12, and the only difference between the two command lines is three characters.
+
+The third uses the fully qualified path in quotes, which is the shape a script or a scheduled task would normally use. Version 1 missed it for the same reason as the second, with the closing quote sitting in the way as well.
+
+The fourth uses `/restore`, a verb version 1 did not cover at all. Paired with `/backup` it lets an attacker write the policy out to a file, edit it so everything is switched off, and put it back, and the words disable, clear and remove never appear in the command line.
+
+The second command is the only one I have a before and after for, since it is the one I happened to run under both versions. For the third and fourth, version 1's pattern has no way of matching them and that is provable from the regex itself, but I did not capture it failing.
+
+<img width="1278" height="876" alt="image" src="https://github.com/user-attachments/assets/e60a0cb3-4384-403e-aea1-f23896b1e220" />
+
+<img width="1281" height="916" alt="image" src="https://github.com/user-attachments/assets/0bf1258d-9ca6-4af1-b096-9d22e6629232" />
+
+Plain form (control)
+
+```json
+{
+  "agent": { "name": "Win-10-Endpoint-01", "id": "001" },
+  "data": {
+    "win": {
+      "eventdata": {
+        "image": "C:\\Windows\\System32\\cmd.exe",
+        "commandLine": "\"C:\\Windows\\system32\\cmd.exe\" /c auditpol /set \"/category:Detailed Tracking\" /success:disable",
+        "parentImage": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "parentCommandLine": "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"",
+        "processId": "4752",
+        "parentProcessId": "9156",
+        "user": "WIN10-ENDPT-1\\WazuhUser",
+        "integrityLevel": "High",
+        "ruleName": "technique_id=T1059.003,technique_name=Windows Command Shell"
+      },
+      "system": {
+        "eventID": "1",
+        "channel": "Microsoft-Windows-Sysmon/Operational",
+        "eventRecordID": "78397"
+      }
+    }
+  },
+  "rule": {
+    "id": "100102",
+    "level": 12,
+    "description": "Audit policy impaired via auditpol - User: WIN10-ENDPT-1\\\\WazuhUser",
+    "groups": ["sysmon", "local"],
+    "mitre": {
+      "id": ["T1562.001"],
+      "technique": ["Disable or Modify Tools"],
+      "tactic": ["Defense Evasion"]
+    }
+  }
+}
+```
+
+Executable name
+
+```json
+{
+  "agent": { "name": "Win-10-Endpoint-01", "id": "001" },
+  "data": {
+    "win": {
+      "eventdata": {
+        "image": "C:\\Windows\\System32\\cmd.exe",
+        "commandLine": "\"C:\\Windows\\system32\\cmd.exe\" /c auditpol.exe /set \"/category:Detailed Tracking\" /success:disable",
+        "parentImage": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "parentCommandLine": "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"",
+        "processId": "9884",
+        "parentProcessId": "9156",
+        "user": "WIN10-ENDPT-1\\WazuhUser",
+        "integrityLevel": "High",
+        "ruleName": "technique_id=T1059.003,technique_name=Windows Command Shell"
+      },
+      "system": {
+        "eventID": "1",
+        "channel": "Microsoft-Windows-Sysmon/Operational",
+        "eventRecordID": "78446"
+      }
+    }
+  },
+  "rule": {
+    "id": "100102",
+    "level": 12,
+    "description": "Audit policy impaired via auditpol - User: WIN10-ENDPT-1\\\\WazuhUser",
+    "groups": ["sysmon", "local"],
+    "mitre": {
+      "id": ["T1562.001"],
+      "technique": ["Disable or Modify Tools"],
+      "tactic": ["Defense Evasion"]
+    }
+  }
+}
+```
+
+Quoted Full Path
+
+```json
+{
+  "agent": { "name": "Win-10-Endpoint-01", "id": "001" },
+  "data": {
+    "win": {
+      "eventdata": {
+        "image": "C:\\Windows\\System32\\cmd.exe",
+        "commandLine": "\"C:\\Windows\\system32\\cmd.exe\"  /s /c \"\"C:\\Windows\\System32\\auditpol.exe\" /set /category:\"Detailed Tracking\" /success:disable\"",
+        "parentImage": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "parentCommandLine": "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"",
+        "processId": "8008",
+        "parentProcessId": "9156",
+        "user": "WIN10-ENDPT-1\\WazuhUser",
+        "integrityLevel": "High",
+        "ruleName": "technique_id=T1059.003,technique_name=Windows Command Shell"
+      },
+      "system": {
+        "eventID": "1",
+        "channel": "Microsoft-Windows-Sysmon/Operational",
+        "eventRecordID": "78407"
+      }
+    }
+  },
+  "rule": {
+    "id": "100102",
+    "level": 12,
+    "description": "Audit policy impaired via auditpol - User: WIN10-ENDPT-1\\\\WazuhUser",
+    "groups": ["sysmon", "local"],
+    "mitre": {
+      "id": ["T1562.001"],
+      "technique": ["Disable or Modify Tools"],
+      "tactic": ["Defense Evasion"]
+    }
+  }
+}
+```
+
+Restore
+
+```json
+{
+  "agent": { "name": "Win-10-Endpoint-01", "id": "001" },
+  "data": {
+    "win": {
+      "eventdata": {
+        "image": "C:\\Windows\\System32\\cmd.exe",
+        "commandLine": "\"C:\\Windows\\system32\\cmd.exe\" /c auditpol /restore /file:C:\\Users\\Public\\pol.csv",
+        "parentImage": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "parentCommandLine": "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\"",
+        "processId": "11212",
+        "parentProcessId": "9156",
+        "user": "WIN10-ENDPT-1\\WazuhUser",
+        "integrityLevel": "High",
+        "ruleName": "technique_id=T1059.003,technique_name=Windows Command Shell"
+      },
+      "system": {
+        "eventID": "1",
+        "channel": "Microsoft-Windows-Sysmon/Operational",
+        "eventRecordID": "78456"
+      }
+    }
+  },
+  "rule": {
+    "id": "100102",
+    "level": 12,
+    "description": "Audit policy impaired via auditpol - User: WIN10-ENDPT-1\\\\WazuhUser",
+    "groups": ["sysmon", "local"],
+    "mitre": {
+      "id": ["T1562.001"],
+      "technique": ["Disable or Modify Tools"],
+      "tactic": ["Defense Evasion"]
+    }
+  }
+}
+```
+
+Version 2 caught all four. Every one of them came back as 100102 at level 12 with the description reading "Audit policy impaired via auditpol - User: WIN10-ENDPT-1\WazuhUser" and the alert tagged T1562.001 under Defense Evasion. The control fired alongside the three new cases, so widening the pattern did not cost me the coverage version 1 already had.
+
+And to make sure that this rule blocks the technique it was originally intended for, I reran Atomic Test 4, and also Atomic Test 5.
+
+<img width="1282" height="918" alt="image" src="https://github.com/user-attachments/assets/d35dd507-14b8-448e-a122-f5cdb4bcda05" />
+
+<img width="1282" height="917" alt="image" src="https://github.com/user-attachments/assets/7ff9c15b-c27e-454e-8b5b-185bebac58e1" />
+
+Atomic Test 4
+
+```json
+{
+  "data": { "win": { "eventdata": {
+    "commandLine": "\"cmd.exe\" /c auditpol /set /category:\"Account Logon\" /success:disable /failure:disable & auditpol /set /category:\"Logon/Logoff\" /success:disable /failure:disable & auditpol /set /category:\"Detailed Tracking\" /success:disable",
+    "user": "WIN10-ENDPT-1\\WazuhUser"
+  } } },
+  "rule": { "id": "100102", "level": 12, "description": "Audit policy impaired via auditpol - User: WIN10-ENDPT-1\\\\WazuhUser" }
+}
+```
+
+Atomic Test 5
+
+```json
+{
+  "data": { "win": { "eventdata": {
+    "commandLine": "\"cmd.exe\" /c auditpol /clear /y & auditpol /remove /allusers",
+    "user": "WIN10-ENDPT-1\\WazuhUser"
+  } } },
+  "rule": { "id": "100102", "level": 12, "description": "Audit policy impaired via auditpol - User: WIN10-ENDPT-1\\\\WazuhUser" }
+}
+```
+
+It turns out, it sure enough can!
+
 ## Coverage Limits
+
+The goal I set for this rule was to detect the behavior in the atomic tests rather than just the specific commands inside them, and by that measure I accomplished what I wanted to do. Atomic Tests 4 and 5 use completely different auditpol verbs and the first iteration of my rule caught both without being modified in between, along with three other ways of writing the same thing that I came up with afterwards. However, there are a lot of detection gaps I should acknowledge too.
+
+The limit I did not expect is that the rule depends on the command being an argument to something, and I found this out at the later part of my finding. When auditpol runs as `cmd /c auditpol /clear /y`, the whole string ends up in the command line of the shell, and the shell is a process Sysmon logs. When somebody types `auditpol /clear /y` on a command prompt that is already open, nothing carries that string anywhere. The shell's own command line is just `cmd.exe`, and the only process holding the text is `auditpol.exe`, which Sysmon on this endpoint does not log at all. I confirmed this twice, once running the command directly in PowerShell and once typing it into an administrator command prompt, and both times the policy changed, Windows recorded it, 60112 fired, and my rule stayed silent. Every atomic test runs through `cmd /c`, which is why every atomic test passed. That is something I think is worth noting, because it means the rule was passing partly on the shape of test harness rather than on the technique. Fixing it is not a change to the rule either, since no pattern can match an event never written. This would mean I would have to modify what Sysmon is configured to collect.
+
+The rule also only covers the audit policy half of the technique. T1685.001 includes stopping the EventLog service outright with `sc config eventlog start=disabled` or `Stop-Service`, disabling individual logs with `wevtutil sl /e:false`, and the Autologger registry keys, one of which does not even need administrative rights. All of those stop events being written and none of them go anywhere near auditpol. Covering them would mean a rule for each tool, since Wazuh cannot pull the name of the tool out of the match and put it into the description, and at that point I would be expanding the ruleset rather than improving this rule. I know roughly what those rules would look like and I have not written them.
+
+Another coverage limit I think worth noting in my rule is that it fires on the command being run, and not on the policy actually being changed. Sysmon writes the process creation event when the shell starts, which is before auditpol has done anything, and that is why my alert lands ahead of the 60112s in the dashboard rather than behind them. If the command had failed, or the session had not been elevated, the alert would look exactly the same. The rule tells an analyst that somebody tried, and confirming that it worked means going to the audit policy events afterwards.
+
+Anything that breaks up the string `auditpol` gets past it. `audit^pol /clear /y` runs fine in a command shell and the caret defeats a literal match, and the same goes for a form like `Start-Process auditpol -ArgumentList "/clear /y"` where the flag is not adjacent to the tool name. I could write the pattern to tolerate carets between every character, but the rule would become quickly unreadable, and it would be incredibly difficult to maintain. The environment variable form is covered by 100103 from my last finding, though only by accident, since that rule is looking for `%VAR:~` rather than for this. I did not test either of these, they are limits I can see in the pattern rather than ones I watched happen.
+
+Nothing that changes the audit policy without a command line is visible to this rule at all. secpol.msc is a GUI and Group Policy pushes audit settings down from a domain controller. Both produce the same 4719 events that 60112 fires on, and neither produces a process with auditpol anywhere in its command line. That is not something I can fix from the Sysmon side either, because there is no process to log.
+
+Finally, this is a detection and it prevents nothing, and it cannot tell me whether the person running the command was supposed to. Matching only on disable, clear, remove and restore means the rule stays quiet when the policy is put back, which I did test, and that removes the most common legitimate case. Past that, an administrator disabling a subcategory deliberately produces the same alert as an attacker doing it. Putting the user in the description makes that faster to triage but it does not make it any less likely to happen.
