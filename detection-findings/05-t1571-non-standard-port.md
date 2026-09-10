@@ -80,41 +80,111 @@ That also makes this a different kind of gap to the last three findings. In find
     </mitre>
   </rule>
 ```
-The first thing to say about this rule is that it is built the opposite way round to every other rule I have written. 100100, 100102 and 100103 are all allow by default. They sit quiet until a specific string turns up, and that string is the thing I decided was bad. This rule is deny by default. It fires on every outbound connection except the six ports I decided were fine, so everything I did not think of would be alerted, rather than everything I did not think of getting through.
+Starting with the severity. Level 10 is where I put this one and I think it is the right place for it. An outbound connection to an uncommon port could be an indicator of an attack and it is not something that should be happening often, but it is not self explanatory the way something like a brute force attack is. With 100104 the alert is telling you what happened, because twenty failed logons followed by a successful one from the same address is not ambiguous. This one is not that, it is telling me something uncommon happened and that somebody should go and look at it, which is what level 10 is for. It also keeps the rule underneath the `email_alert_level` of 12 in `ossec.conf`, so it is not mailing me every time it fires, and that matters more here than on my other rules because this is the one most likely to catch something ordinary.
+`<if_sid>92101</if_sid>` chains the rule onto the shipped rule for PowerShell making a TCP connection, so mine only ever gets evaluated on events 92101 has already matched. That is what makes "PowerShell outbound TCP" in my description something the rule genuinely checks rather than something I am asserting, because 92101 has already constrained both the process and the protocol before my own fields are looked at. It also means this rule sits next to 92102 and 92103 as another thing chained onto that parent, rather than replacing anything.
 
-That is a direct response to the problem I ran into in finding 03. In that one I wanted to stop my obfuscation rule from firing on backup scripts, and the fix I considered was excluding variable names like `DATE` and `TIME`. I talked myself out of it because it was a deny list that could only ever cover the cases I happened to test, and it would need maintaining forever as new legitimate variables turned up. This rule has the mirror image of that problem and it is a better problem to have. My list of six ports is incomplete in exactly the same way, but being incomplete makes the rule noisier rather than blinder. A port I forgot produces a false positive I will see. A variable name I forgot produced a miss I would never have known about.
+`win.eventdata.initiated` being `^true$` is what makes this a command and control rule rather than just a network rule. Sysmon sets that field to true on connections the endpoint opened itself, and false on connections that came in to it, so requiring that it's true means the rule only ever matches outbound connections. That matters for the technique, because the whole point of C2 is that the victim is the one making the connection, which is how the channel gets through a firewall that would never have allowed that connection in the other direction. Because of that it also means the hydra traffic from finding 01 would not fire this rule. It came in to the endpoint on 3389, and 3389 is not on my list, so without the direction check my brute force finding would be setting off my C2 rule.
 
-`initiated` being `^true$` is what makes this a command and control rule rather than a network rule. Sysmon sets that field on connections the endpoint originated, so requiring it true throws away everything connecting inward and leaves only the machine calling out. That matters for the technique, because the whole point of C2 is that the victim initiates, which is how the channel gets through a firewall that would never have allowed the connection in the other direction. It also happens to mean the hydra traffic from finding 01 does not fire this rule. That came in to the endpoint on 3389, and 3389 is not in my allowed list, so without the direction check my brute force finding would be setting off my C2 rule.
+`win.eventdata.destinationPort` is where the framing of this rule is fundamentally different from my other ones. 100100, 100102 and 100103 all sit quiet until a specific string turns up, and that string is the thing I decided was bad. This one is an allow list. `^(?!(80|443|135|389|5985|5986)$)\d+$` is a negative lookahead, so it matches when the field is not one of those six and then requires the whole thing to be digits. Six ports are fine and everything else alerts, which means anything I did not think of gets flagged rather than getting through. The character doing the work is the `$` inside the lookahead group. Without it the lookahead would reject anything that merely starts with one of those numbers, so 8080, 8000 and 4433 would be excluded alongside 80. With it in there only an exact match on one of the six is excluded, so 8080 fires and 80 does not. The six themselves are the set I decided a Windows endpoint has a reason to open outward on, which is 80 and 443 for HTTP and HTTPS, 135 for the RPC endpoint mapper, 389 for LDAP, and 5985 and 5986 for WinRM. I also believed here that, an allow list is easier to justify here than it would have been in any of my other findings, because of what this rule is actually claiming. It is not saying an attack happened. It is saying an outbound TCP connection went somewhere uncommon, and that is a far easier call to make than deciding whether a command line is malicious. It does make this rule noisier than my others, and I think that is the right trade.
 
-The port match is the part I want to explain properly, because the regex is doing something less obvious than it looks. `^(?!(80|443|135|389|5985|5986)$)\d+$` is a negative lookahead, so it matches when what follows is not one of those six, and then requires the whole field to be digits. The character that makes it work is the `$` inside the lookahead group. Without it, the lookahead would fail on anything that merely starts with one of those numbers, so 80 would be excluded and so would 8080, 8000 and 4433. With the `$` in there the lookahead only fails when the entire field is exactly one of the six, which means 8080 fires and 80 does not. That is the difference between a rule that covers the alternate HTTP ports attackers actually use and one that has a hole sitting exactly where they would put the channel.
+Finding 03 is what made me frame it this way. In that finding, I wanted to stop my obfuscation rule firing on backup scripts, and the fix I considered was excluding variable names like `DATE` and `TIME`. However, I didn't do it because a deny list can only ever cover the cases I happened to test, and I would have had no way of knowing what it was missing. The allow list was also far easier to actually build. There are 65,535 ports, so going the other way would have meant sitting down and trying to list every uncommon one an attacker might pick, and missing even one of them leaves a port the rule cannot see. Writing the allow list meant deciding on six and letting everything else alert. 
 
-The six ports are the set I decided a Windows endpoint has a reason to open outward on. 80 and 443 are HTTP and HTTPS, 135 is the RPC endpoint mapper, 389 is LDAP, and 5985 and 5986 are WinRM over HTTP and HTTPS. That list is short because my lab is small, which I get into in Coverage Limits, and it is the part of the rule that is really being tuned rather than the regex around it.
+The description is doing something I have ended up doing in the final version of most of my rules, which is pulling a field into the alert text so it says something useful before anybody has to open it. I felt like this rule needed the destination to be readable more than any of the others did, because detecting suspicious outbound connections is the whole point of it, and the first question anybody asks about one is where it went. `$(win.eventdata.destinationIp)` and `$(win.eventdata.destinationPort)` put that straight into the alert list, so that question is answered in the list itself. An alert telling me an uncommon port was used without telling me which port, or which address it went to, would not be much use. The MITRE tag is T1571, which puts the alert under Command and Control. 
 
-Level 10 is the same call I made on 100103 and for the same reason. `email_alert_level` in `ossec.conf` is 12, so anything at 12 or above sends mail every time it fires, and this is not a rule I want mailing me. It is deny by default on a field the machine touches constantly, so it is the rule of mine most likely to fire on something ordinary. 10 keeps the alert well clear of the level 3 process creation noise without treating every unusual port as a confirmed compromise.
+**Version 1.5**
 
-The description is doing the same job as the ones in 100102 and 100106, where I interpolated a field so the alert says something useful before anybody opens it. I felt like this rule needed the destination to be readable more than either of those did, because detecting suspicious outbound connections is the whole point of it, and an outbound connection is defined by where it went. `$(win.eventdata.destinationIp)` and `$(win.eventdata.destinationPort)` put that straight into the alert list, so the first thing anybody wants to know about a connection alert is answered in the list itself. An alert telling me an uncommon port was used without telling me which port, or which address it went to, would not be much use.
+```json
+  <rule id="100105" level="10">
+    <if_sid>92101</if_sid>
+    <field name="win.eventdata.initiated">^true$</field>
+    <field name="win.eventdata.destinationPort" type="pcre2">^(?!(80|443|135|389|5985|5986)$)\d+$</field>
+    <options>no_full_log</options>
+    <description>PowerShell outbound TCP to uncommon port $(win.eventdata.destinationIp):$(win.eventdata.destinationPort)</description>
+    <mitre>
+      <id>T1571</id>
+    </mitre>
+  </rule>
+```
+I am calling this version 1.5 rather than version 2 because there is only one change in it and it is not a detection change at all. `no_full_log` is something I do across all of my rules and this one did not have it, which meant the alert was carrying the entire event in its body when it did not need to. I didn't make any other changes to what the rule matched on.
+
+I didn't change the port pattern itself either, and this was a deliberate decision I made. This is because I did not think tuning it any further would actually get me much. If I tightened it by taking ports off the allow list, the rule would get more sensitive and start alerting on connections that were fine, so I would just be adding noise. If I loosened it by allowing more ports, I would definitely be losing coverage, because a port I allow is a port this rule can never see. Either direction would cost me something and neither one gives much back, so the port pattern remained unchanged.
+
+There was a much bigger change I tried before settling on this one, which was chaining the rule to 61605 instead of 92101 so that it would cover every process making an outbound connection rather than only PowerShell. It did not work, and the reason it did not work is worth explaining properly, so I have written it up in Coverage Limits.
+
 
 ## Custom Detection Rule Result
 
-**Version 1**
+**Version 1 Test**
 
 <img width="1278" height="818" alt="image" src="https://github.com/user-attachments/assets/eed01473-815e-4940-a266-47779058e30e" />
 
 ```json
+{
+  "agent": { "name": "Win-10-Endpoint-01", "ip": "192.168.10.51", "id": "001" },
+  "data": {
+    "win": {
+      "eventdata": {
+        "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "user": "WIN10-ENDPT-1\\WazuhUser",
+        "processId": "3896",
+        "protocol": "tcp",
+        "initiated": "true",
+        "sourceIp": "192.168.10.51",
+        "sourcePort": "55447",
+        "destinationIp": "192.168.10.52",
+        "destinationPort": "8081",
+        "ruleName": "technique_id=T1059.001,technique_name=PowerShell"
+      },
+      "system": {
+        "eventID": "3",
+        "channel": "Microsoft-Windows-Sysmon/Operational",
+        "eventRecordID": "79821"
+      }
+    }
+  },
+  "rule": {
+    "id": "100105",
+    "level": 10,
+    "description": "PowerShell outbound TCP to uncommon port 192.168.10.52:8081",
+    "groups": ["sysmon", "local"],
+    "mitre": {
+      "id": ["T1571"],
+      "technique": ["Non-Standard Port"],
+      "tactic": ["Command and Control"]
+    }
+  }
+}
 ```
 
-100105 fired at level 10 as expected, with the description "PowerShell outbound TCP to uncommon port 192.168.10.52:8081", so both the IP address and the port used could be seen. I feel like this rule definitely needed the destination to be more readable than my other findings, because it needed the destination to be more readable than them. This is because the whole point
+100105 fired once at level 10, as expected, with the description "PowerShell outbound TCP to uncommon port 192.168.10.52:8081". Both fields were filled in, so the address and the port are readable straight off the alert list without opening anything. 
 
-The alert is tagged T1571, Non-Standard Port, under Command and Control. Nothing in the baseline carried that tactic at all.
+The alert is tagged T1571, Non-Standard Port, under Command and Control. Nothing in the baseline carried that tactic at all, so this is the only thing in the run an analyst would find if they went looking by tactic.
 
-The event behind it is Sysmon Event 3. `initiated` is true, `protocol` is tcp, and the connection runs from 192.168.10.51 on source port 55447 out to 192.168.10.52 on 8081. Those are the fields the rule read, and the attacker typed none of them.
+The event behind it is Sysmon Event 3. `initiated` is true, `protocol` is tcp, and the connection runs from 192.168.10.51 on source port 55447 out to 192.168.10.52 on 8081. Those are the fields the rule read, and it did so without the attacker typing them.
 
-`mail` is false, because level 10 sits under the `email_alert_level` of 12 in `ossec.conf`. That was the reason I picked 10.
-
-One thing carried over from the baseline is the `ruleName` tag, which still reads `technique_id=T1059.001,technique_name=PowerShell`. That is on the network connection event itself now, so the Sysmon config is labelling the actual T1571 connection as PowerShell execution. It describes the binary that opened the socket rather than what the socket was for, which is why I have never anchored a rule to that field.
+`mail` was false, because level 10 sits under the `email_alert_level` of 12 in `ossec.conf`. Again, this was intentional because although this could be an indicator of compromise it alone is not certain of one.
 
 
 ## Coverage Limits
 
+The first thing I think is worth covering here is the second iteration of my rule that did not work, because it failed for a reason that had nothing to do with whether the idea was right. What I wanted was for the rule to stop being PowerShell specific. T1571 is about the port an attacker picks and not about which program opens the connection, so I believed that chaining the rule to 61605 instead of 92101 should have put my rule in front of every outbound connection the endpoint makes. I still think that reasoning is correct and I would make the same call again.
 
+What I did not account for was where each rule ends up sitting in the rule tree. 61605 is the base Sysmon Event 3 rule and it carries the group `sysmon_event3`. 92101 attaches itself to that group, and my rule was attaching to 61605 by ID, so instead of sitting underneath 92101 the way version 1 did, the two of them ended up as siblings under the same parent. Wazuh takes the first child that matches and then stops, and the shipped rules load before `local_rules.xml`, so on any PowerShell connection over TCP 92101 matched first. 92101 is level 0, which means it produces no alert at all, and its only children are 92102 for port 135 and 92103 for port 389, neither of which my traffic matched. The event clearly matched, my rule was write line for line in what it detected, but it still wouldn't fire because of this. Because of this, I kept Version 1 simply for the reason that it  fired and Version 2 wouldn't.
+
+I was able to confirm this when I was testing out the rule. There are two Sysmon Event 3s on the endpoint at 10:52:30 and 10:54:06, both were TCP, both with `initiated` set to true, both going to 192.168.10.52 on port 8081, and both of them after I had loaded version 2. However neither would produce an alert.
+
+Because I reverted to chaining on 92101, the rule only ever sees connections that PowerShell makes, which happens to be the biggest limit of this rule. 
+
+An attacker who opens the channel with anything other than PowerShell is invisible to this rule no matter which port they use, and the technique does not require PowerShell at any point. This could be things such as a LOLBin, a different interpreter, or any program the attacker brought onto the machine themselves could all get past it.
+Fixing this rule properly would mean overwriting 92101, or writing a second rule chained to 61605 to cover everything else. This means that there is no version of 100105 that can close the detection gap on its own, I would have to write another rule.
+
+The allow list is the other obvious weakness, and 443 is the worst of it. Any channel that runs over one of the six ports I allow goes straight past this rule, and 443 is where real C2 lives precisely because everything allows it outbound. So the rule is deliberately blind to the most common case in exchange for catching an attacker who picked something unusual. T1571 is specifically the attacker choosing not to do the obvious thing, and a rule written against that technique only ever catches the ones who made that choice.
+
+There is a collection limit underneath all of this as well, and I found it by accident while debugging version 2. I ran `curl.exe` to 192.168.10.52 on 8081 as a test, the connection completed and the listener on Kali printed the request, and Sysmon never wrote a network connection event for it at all. That is the same shape of problem I ran into in finding 04, where Sysmon was only logging process creation for a curated set of binaries. I want to be clear that this one is not a limit of my rule, it is a limit of what my Sysmon config is collecting. No pattern I could write would ever match an event that was not created in the first place, so there is no change to 100105 that fixes this, and closing it would mean changing what Sysmon is told to log instead. What makes it worth flagging anyway is that from the manager side the two are indistinguishable, because a rule that did not match and an event that never arrived both look like nothing.
+
+On false positives, I finally have a number, which is something I could not give at the end of most of my findings. Over 24 hours this endpoint produced 51 outbound connections that were not on my allow list. 49 of them were svchost doing mDNS on UDP 5353 and the other 2 were my own test connections to 8081. Since 92101 restricts the rule to TCP, none of the mDNS ever reaches it, so the rule produced no false positives at all in that window. I want to be careful about what that number actually proves though. This is a controlled environment without many moving parts, running on a host only network with very few network services configured, so a false positive rate measured here does not say much about how this rule would perform in a production environment.
+
+The `ruleName` field on the connection event is worth noting too, and like the collection gap it is about the Sysmon config rather than my rule. It reads `technique_id=T1059.001,technique_name=PowerShell`, so the config has labelled an actual T1571 connection as PowerShell execution. The tag describes which program opened the connection rather than what the connection was doing. This is the second time I have run into that, since in finding 03 a caret anywhere in a command line was enough to get an event tagged T1027. I have never anchored a rule to that field, but it does mean the tags coming out of Sysmon are not something I can lean on when I am working out what a connection was actually for.
+
+Finally, and like all of my rules this is a detection and it prevents nothing. It tells an analyst that the endpoint reached out somewhere unusual, but it does not tell them whether the person who caused it was supposed to, and there is no field in a network connection event that could.
 
