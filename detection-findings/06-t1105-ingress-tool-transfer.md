@@ -94,9 +94,24 @@ The severity level of this rule is level 10, and it was for the same reason as 1
 The description pulls the image and the destination into the alert text, so that `$(win.eventdata.image)` says which of the five programs fired the rule and `$(win.eventdata.destinationIp):$(win.eventdata.destinationPort)` says where it went, and both are readable off the alert list without opening anything. The MITRE tag is T1105, which puts the alert under Command and Control, the same tactic as 100105.
 
 
+**Version 1.5**
 
+```xml
+  <rule id="100106" level="10">
+    <if_sid>61605</if_sid>
+    <field name="win.eventdata.initiated">^true$</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)(certutil|bitsadmin|mshta|regsvr32|replace)\.exe</field>
+    <options>no_full_log</options>
+    <description>Suspicious outbound connection opened by $(win.eventdata.image) to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort).</description>
+    <mitre>
+      <id>T1105</id>
+    </mitre>
+  </rule>
+```
 
-**Verison 2**
+I am calling this version 1.5 rather than version 2 because the only change in it is `<options>no_full_log</options>`, and that it's more of a hygiene change. It does not affect what the rule matches or what fires it, just only what the alert carries. This was the only one of my six rules without it, and the version 1 alerts were dragging the entire event along in their body on top of the message field that already described it.
+
+I did try a second version that changed what the rule matched, and I did not keep it. The reasoning behind my rule and why I didn't implement it in the end are in the Coverage Limits.
 
 
 ## Custom Detection Rule Result
@@ -153,3 +168,14 @@ The `ruleName` on the event reads `technique_id=T1218,technique_name=Signed Bina
 
 
 ## Coverage Limits
+
+The change I tried to make from Version 1 to Version 2, was anchoring the image pattern to the file name, since `win.eventdata.image` is a full path and my pattern can match anywhere inside it. A binary named `notcertutil.exe`, or anything running out of a folder called `mshta.exe_backup`, would fire this rule without being a LOLBin. I didn't end up implementing it, because I could not produce a case where the two versions behaved differently. I copied `certutil.exe` to `C:\Test\notcertutil.exe` and ran the same download, and the transfer completed since Kali logged two requests and returned 200 to both, but Sysmon wrote no network connection event for it at all.
+
+Despite my rule not firing on the renamed copy, it showed me that renaming one of these binaries didn't evade my rule, it only evades Sysmon's collection. This is because
+Sysmon didn't write a connection event for `C:\Test\notcertutil.exe` in the first place. It means that no changes I could make to my rule in  `local_rules.xml` would have caught that download, since the rule engine was never handed anything to look at. The same ceiling sits underneath the whole rule, because the Sysmon config collects Event 3 against an include list rather than logging every connection, so a binary that is not on that list is invisible no matter what my rule says. `curl.exe` in finding 05 was the same limit reached from the other direction, where the connection completed and Sysmon wrote nothing for it either.
+
+The five binaries I named in my rule are not all of T1105. `wmic`, `msiexec`, `rundll32`, `esentutl` and everything else documented as being able to pull a file down get past this rule while doing exactly the technique it is written for, and adding them to the pattern would genuinely widen what it covers. What stopped me is that a name I have not tested is a claim rather than coverage. The five already in there only do anything because Sysmon collects Event 3 for those images on this endpoint, and certutil is the only one of the five I have actually confirmed that for, so I have no reason to assume the next five would be collected either. Two of the obvious additions would cost me as well, because `rundll32` and `msiexec` both make outbound connections during normal Windows operation in a way certutil and bitsadmin do not, so the rule would get noisier in return for coverage I could not demonstrate. What it detects is five binaries opening outbound connections, and the T1105 tag should not be read as broader than that.
+
+My rule also only detects a connection rather than a transfer as well. The file, the URL and whether anything was written to disk are all absent from the event, so a fetch that pulled a payload and one that pulled nothing would produce the same alert. One download also produced two alerts, because certutil opens two connections and my rule matches on the connection, so the alert count reflects how many sockets a binary opened rather than how many files it fetched.
+
+I never measured a false positive rate for this rule. `certutil.exe` does certificate revocation checking over HTTP as normal behaviour, and this rule has no condition on destination or port, so that traffic would fire it on a real machine. A host-only lab with almost no services running would not have produced a number worth quoting anyway. Like the rest of my rules this is a detection and it prevents nothing.
