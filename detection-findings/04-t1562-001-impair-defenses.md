@@ -1,4 +1,4 @@
-# Finding 04 - T1562.001 Impair Defenses: Disable or Modify Tools
+# T1562.001 — Impair Defenses: Disable or Modify Tools
 
 ## Overview
 
