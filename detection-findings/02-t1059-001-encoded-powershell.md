@@ -163,7 +163,11 @@ The obvious fix was lowering the number, but that opens a different problem. `-e
 
 Instead of checking how long the payload is, this checks whether it actually looks like UTF-16LE base64. `(?:[A-Za-z0-9+/]{4}A[A-Za-z0-9+/]{2}A){2,}` matches that pattern. Four characters, an `A`, two characters, another `A`, repeated at least twice. That's 16 base64 characters, or six ASCII characters of payload, so `whoami` matches. `SilentlyContinue` doesn't, because splitting it the same way gives `Silently` and `Continue`, with no `A` in either position.
 
-My final edit was the description. 92057 says PowerShell spawned a PowerShell process, which only makes sense because that rule requires a PowerShell parent in the first place. Mine fires no matter what the parent is, so I interpolated `$(win.eventdata.parentImage)` into the description. That way the alert itself shows whether the command came from a command prompt, a service, or PowerShell.
+The version in `local_rules.xml` also carries `<options>no_full_log</options>`, which I added after testing to match my other rules. It only changes what the alert carries, not what the rule matches.
+
+My final edit was the description. 92057 says PowerShell spawned a PowerShell process, which only makes sense because that rule requires a PowerShell parent in the first place. Mine fires no matter what the parent is, so I interpolated `$(win.eventdata.parentImage)` into the description. That way the alert itself shows whether the command came from Command Prompt, a service, or PowerShell.
+
+The version in `local_rules.xml` also carries `<options>no_full_log</options>`, which I added after testing to match my other rules. It only changes what the alert carries, not what the rule matches.
 
 
 ## Custom Detection Rule Result
