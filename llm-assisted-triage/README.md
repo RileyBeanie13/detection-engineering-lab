@@ -11,7 +11,7 @@ The idea for this triage layer has been on my mind since I first started deployi
 
 I was also very curious about what a deployed version would actually look like. If it meant just pasting alerts into a chatbot, it would be no better than asking something like Claude or ChatGPT for the verdict. Because of this, I wanted one that runs on its own inside the pipeline whenever a rule fires and puts its note where the analyst is already working.
 
-One of the biggest reasons was the talk around AI itself. I kept hearing that AI is going to replace whole industries, and some people even say it will wipe out cybersecurity. I was curious whether that holds up for the work I had been doing. This is because deciding whether an alert is a true or false positive carries real risk, since a wrong call could potentially mean a missed attack, and that is not something that can be automated away carelessly. Another thing I was considering is that adding an AI note could also result in more work for the analyst, as now they'd have to judge the AI's judgement as well as the alert. If the note is confidently wrong, the helper has made the work harder. I wanted to build my own take on what an AI should and should not be doing in that position, and see how it actually performs.
+One of the biggest reasons was the talk around AI itself. I kept hearing that AI is going to replace whole industries, and some people even say it will wipe out cybersecurity. I was curious whether that holds up for the work I had been doing. This is because deciding whether an alert is a true or false positive carries real risk, since a wrong call could potentially mean a missed attack, and that is not something that can be automated away carelessly. Another thing I was considering is that adding an AI note could also result in more work for the analyst, as now they'd have to judge the AI's judgment as well as the alert. If the note is confidently wrong, the helper has made the work harder. I wanted to build my own take on what an AI should and should not be doing in that position, and see how it actually performs.
 
 Adding the model also opened up something I wanted to explore, which was AI security. Most of the conversation around AI in cybersecurity is about using it, which is what my triage layer does, but while working on this part of the project, I learned what the other side looks like, which is defending it. In security, anything you add to a system can increase its attack surface and its risk, and an AI model is no exception. Qwen sits on the same layer as my detection rules, between Wazuh and the analyst, and some of what it reads is text an attacker writes, such as a command line. If an attacker can talk the model into calling their attack a false positive, the analyst gets a note telling them to look away. So alongside measuring how accurate Qwen is for triaging alerts, I explored prompt injection and also worked on making it more resistant.
 
@@ -79,7 +79,7 @@ I chose a locally hosted model on purpose. A company putting AI into its SOC wou
 
 ### Design Decisions
 
-The triage layer is advisory only, and I will get into why I made it this way later. The model cannot close or escalate alerts, or prevent anything, so in the worst-case scenario, an incorrect or attacker-manipulated verdict just sits next to an alert that still fired. This is also a pipeline rather than an agent. The model has no tools, so it cannot run commands, look anything up, or perform actions autonomously. All it does is read one alert and come up with its judgement. The note comes back as a separate alert because Wazuh cannot edit an alert once it has been written. This is the same way Wazuh's own VirusTotal integration works, and my script is adapted from it.
+The triage layer is advisory only, and I will get into why I made it this way later. The model cannot close or escalate alerts, or prevent anything, so in the worst-case scenario, an incorrect or attacker-manipulated verdict just sits next to an alert that still fired. This is also a pipeline rather than an agent. The model has no tools, so it cannot run commands, look anything up, or perform actions autonomously. All it does is read one alert and come up with its judgment. The note comes back as a separate alert because Wazuh cannot edit an alert once it has been written. This is the same way Wazuh's own VirusTotal integration works, and my script is adapted from it.
 
 I made it so that a part of my script decodes `-enc` before the model sees the alert, so Qwen can judge the full alert for what it actually is. A small model like this one is prone to hallucinating, and it cannot reliably decode the command by itself, so without decoding it would guess what the command does, and its verdict would not be worth much. My instructions only go in the system message, and the model is given context the way a company would give it, with the known hosts on the network and what they do.
 
@@ -88,12 +88,12 @@ The reply is checked before it goes anywhere, because the model's output is not 
 
 ## Wazuh Configuration
 
-The integration block and the triage rules are in [wazuh-config](wazuh-config/). The integration sends every alert from the six detection rules to the script, with its own timeout and retry settings, because integratord's defaults (10 seconds, 3 retries) override the script's. The triage rules turn the script's reply into an alert whose description changes with the verdict.
+The integration block and the triage rules are in [llm-wazuh-config](llm-wazuh-config/). The integration sends every alert from the six detection rules to the script, with its own timeout and retry settings, because integratord's defaults (10 seconds, 3 retries) override the script's. The triage rules turn the script's reply into an alert whose description changes with the verdict.
 
 
 ## How It Was Tested
 
-Instead of running every attack hundreds of times, I ran each one once, saved the alert Wazuh produced, and wrote a [test harness](eval-harness.py) that replays the saved alerts to Qwen. What I was testing was Qwen's judgement, not my detection rules, so the harness skips the attack and sends the same alert through the triage script 30 times in a row. Qwen does not always give the same answer twice, so 30 runs show how consistent it is as well as how often it is right. Every version of the triage layer was tested against the same 31 saved alerts: 6 true positives, 6 false positives and 19 prompt injection attempts, which are described in [qwen-triage-tests.md](qwen-triage-tests.md).
+Instead of running every attack hundreds of times, I ran each one once, saved the alert Wazuh produced, and wrote a [test harness](testing/eval-harness.py) that replays the saved alerts to Qwen. What I was testing was Qwen's judgment, not my detection rules, so the harness skips the attack and sends the same alert through the triage script 30 times in a row. Qwen does not always give the same answer twice, so 30 runs show how consistent it is as well as how often it is right. Every version of the triage layer was tested against the same 31 saved alerts: 6 true positives, 6 false positives and 19 prompt injection attempts, which are described in [qwen-triage-tests.md](testing/qwen-triage-tests.md).
 
 
 ## Findings
@@ -126,11 +126,15 @@ Some of my starting ideas came from Wazuh's own blog post, [Leveraging artificia
 
 The sources for the prompt injection techniques and the Atomic Red Team tests are listed in [qwen-triage-tests.md](testing/qwen-triage-tests.md#resources).
 
+
 ## Files in This Folder
 
 - [custom-qwentriage.py](custom-qwentriage.py): the integration script, final version
-- [eval-harness.py](eval-harness.py): the test harness
-- [qwen-triage-tests.md](qwen-triage-tests.md): the true positive, false positive and prompt injection tests
 - [qwen-triage-findings.md](qwen-triage-findings.md): every version, what changed between runs, and the results
-- [wazuh-config](wazuh-config/): the integration block and the triage rules that bring the note back into Wazuh
-- [results.csv](results.csv): every recorded run
+- [llm-wazuh-config](llm-wazuh-config/): the integration block (`qwen-ossec-integration.xml`) and the triage rules (`qwen-local-rules.xml`) that bring the note back into Wazuh
+- [testing](testing/): everything used to test the triage layer
+  - [eval-harness.py](testing/eval-harness.py): the test harness
+  - [qwen-triage-tests.md](testing/qwen-triage-tests.md): the true positive, false positive and prompt injection tests
+  - [test-alerts](testing/test-alerts/): the 31 saved alerts the harness replays
+  - [results-public.csv](testing/results/results-public.csv): every recorded run
+- [LICENSE-GPL-2.0](LICENSE-GPL-2.0): the license for `custom-qwentriage.py`, which is adapted from Wazuh's VirusTotal integration
