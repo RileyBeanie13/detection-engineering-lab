@@ -1,0 +1,35 @@
+<!-- Add to /var/ossec/etc/rules/local_rules.xml -->
+<!-- Turns the reply from custom-qwentriage.py into an alert. 100107 matches every message
+     from the integration at level 0, and 100108 to 100110 raise an alert whose description
+     shows the verdict, the rule it is about and, for TP and FP, the confidence. -->
+<group name="customqwen-triage,">
+
+    <rule id="100107" level="0">
+        <decoded_as>json</decoded_as>
+        <field name="integration">custom-qwentriage</field>
+        <description>Qwen integration messages.</description>
+        <options>no_full_log</options>
+    </rule>
+
+    <rule id="100108" level="12">
+        <if_sid>100107</if_sid>
+        <field name="qwentriage.Verdict">Likely TP</field>
+        <description>Qwen thinks the $(qwentriage.source.rule_id) alert is most likely a true positive ($(qwentriage.Confidence) confidence)</description>
+        <options>no_full_log</options>
+    </rule>
+
+    <rule id="100109" level="7">
+        <if_sid>100107</if_sid>
+        <field name="qwentriage.Verdict">Likely FP</field>
+        <description>Qwen thinks the $(qwentriage.source.rule_id) alert is most likely a false positive, an analyst should review it ($(qwentriage.Confidence) confidence)</description>
+        <options>no_full_log</options>
+    </rule>
+
+    <rule id="100110" level="12">
+        <if_sid>100107</if_sid>
+        <field name="qwentriage.Verdict">Needs Human</field>
+        <description>Qwen could not decide on the $(qwentriage.source.rule_id) alert, an analyst should review it</description>
+        <options>no_full_log</options>
+    </rule>
+
+</group>

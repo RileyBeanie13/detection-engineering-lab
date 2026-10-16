@@ -1,0 +1,11 @@
+<!-- Add inside <ossec_config> in /var/ossec/etc/ossec.conf -->
+<!-- Sends every alert from the six detection rules to custom-qwentriage.py.
+     timeout and retries are set here because integratord's defaults (10 s, 3 retries)
+     override the values in the script. -->
+<integration>
+  <name>custom-qwentriage</name>
+  <rule_id>100100, 100102, 100103, 100104, 100105, 100106</rule_id>
+  <alert_format>json</alert_format>
+  <timeout>30</timeout>
+  <retries>1</retries>
+</integration>
