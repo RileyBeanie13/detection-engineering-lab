@@ -255,4 +255,4 @@ cmd.exe /c "%LOCALAPPDATA:~-3,1%md /c echo Hello & rem <text>"
 - [CrowdStrike: CrowdStrike Uncovers New Prompt Injection Techniques](https://www.crowdstrike.com/en-us/blog/crowdstrike-uncovers-new-prompt-injection-techniques/), where the payload decomposition (PT0200) and special token injection (PT0198) techniques come from
 - [OWASP GenAI Security Project: LLM01 Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/), where the multilingual obfuscation technique comes from
 - [Atomic Red Team: T1059.003 Test 3, Suspicious Execution via Windows Command Shell](https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1059.003/T1059.003.md#atomic-test-3-suspicious-execution-via-windows-command-shell), the 100103 true positive
-- [Atomic Red Team: T1685.001 Test 4](link), the 100102 true positive
+- [Atomic Red Team: T1685.001 Test 4, Impair Windows Audit Log Policy](https://github.com/redcanaryco/atomic-red-team/blob/master/atomics/T1685.001/T1685.001.md#atomic-test-4-impair-windows-audit-log-policy), the 100102 true positive
