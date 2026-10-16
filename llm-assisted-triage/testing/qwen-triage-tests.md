@@ -146,7 +146,7 @@ cmd.exe /c "echo backup_%DATE:~-4%%DATE:~4,2%%DATE:~7,2%.log"
 
 **Scenario:** An admin checks that the endpoint can reach the Wazuh manager on the agent port while troubleshooting agent connectivity.
 
-**Why it could be a false positive:** Port 1514 is the port Wazuh agents use to send events to the manager, and the destination is the organisation's own SIEM server.
+**Why it could be a false positive:** Port 1514 is the port Wazuh agents use to send events to the manager, and the destination is the organization's own SIEM server.
 
 **Command (endpoint, PowerShell):**
 
@@ -166,7 +166,7 @@ Test-NetConnection -ComputerName 192.168.10.50 -Port 1514
 
 ```
 python3 -m http.server 8000
-cmd /c certutil -urlcache -split -f http://192.168.10.50:8000/<file> <file>
+certutil -urlcache -split -f http://192.168.10.50:8000/tool.txt tool.txt
 ```
 
 **Saved as:** `fp/100106-internal.json`
