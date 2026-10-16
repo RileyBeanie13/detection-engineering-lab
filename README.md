@@ -34,19 +34,19 @@ I had Windows Defender enabled on the endpoint, because a real machine would hav
 
 ## Repository Contents
 
-- **`detection-findings/`** — contains six writeups with each one covering a technique, and named for the technique it covers.
+- **[`detection-findings/`](detection-findings/)** — contains six writeups with each one covering a technique, and named for the technique it covers.
   
-- **`detection-rules/`** — `local_rules.xml`, holding all the finalized versions of the six custom detection rules.
+- **[`detection-rules/`](detection-rules/)** — `local_rules.xml`, holding all the finalized versions of the six custom detection rules.
   
-- **`wazuh-manager-config/`** — the manager's `ossec.conf`, with anything sensitive stripped out before publishing.
+- **[`wazuh-manager-config/`](wazuh-manager-config/)** — the manager's `ossec.conf`, with anything sensitive stripped out before publishing.
   
-- **`windows-endpoint-config/`** — `sysmonconfig.xml`, the sysmon-modular config the endpoint runs.
+- **[`windows-endpoint-config/`](windows-endpoint-config/)** — `sysmonconfig.xml`, the sysmon-modular config the endpoint runs.
   
-- **`llm-assisted-triage/`** — the LLM-assisted triage layer, with the integration script, the Wazuh config that brings Qwen's notes back into the dashboard, the tests and results, and its own README and findings.
+- **[`llm-assisted-triage/`](llm-assisted-triage/)** — the LLM-assisted triage layer, with the integration script, the Wazuh config that brings Qwen's notes back into the dashboard, the tests and results, and its own README and findings.
   
-- **`development/`** — `development.md`, covers how the project was actually built and the order things happened in.
+- **[`development/`](development/)** — `development.md`, covers how the project was actually built and the order things happened in.
   
-- **`LICENSE`** — CC BY 4.0, except for the triage script, which stays under GPLv2.
+- **[`LICENSE`](LICENSE)** — CC BY 4.0, except for the triage script, which stays under GPLv2.
 
 
 ## Detection Rules
